@@ -39,8 +39,7 @@ Z = rand(MvN, J)
 ν = rand(MvNormal(zeros(M - 1), Matrix{Float64}(I, M - 1, M - 1)), N)
 
 GH = 50 
-nodes, weights = FastGaussQuadrature.unweightedgausshermite( GH )
-weights .*= exp.(- nodes .^ 2)
+nodes, weights = gausshermite( GH )
 nodes = sqrt(2.0) .* nodes
 weights = weights ./ sqrt(π)
 
