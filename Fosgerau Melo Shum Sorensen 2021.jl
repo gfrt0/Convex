@@ -2,22 +2,6 @@
 # ψ_sim.m: Calculate ψ(p) from  Fosgerau, Melo, Shum, Sørensen (2021),
 #            Equation (16), p. 4, up to simulation error.
 #--------------------------------------------------------------------------
-#
-# DESCRIPTION: Calculate a solution ψ_S(p) to the problem
-#           minimize{exp(W_S(v)) - v'*p subject to v in R^J}
-# where W_S is the empirical approximation 
-#           W_S(v):=(1/S)sum_{s=S}^{S} max_j{v_j+ε_{sj}}
-# to the surplus W(v):=E[max_j{v_j+ε_j}]
-# based on S independent draws from the joint distribution of
-# ε=(ε_1,...,ε_J).
-#
-# INPUT ARGUMENTS:
-# p:        J x 1 vector of choice probabilities (p_j>0 all j)
-# ε:      J x S matrix of simulation draws
-#
-# OUTPUT ARGUMENT: 
-# ψ: The scalar ψ_S(p)
-#
 # AUTHOR: The MATLAB code was written by Jesper Riis-Vestergaard Sørensen, 
 # Department of Economics, University of Copenhagen, Denmark.
 #   e:  jrvs@econ.ku.dk
@@ -41,37 +25,44 @@ S = 1000000;                          # number of simulation draws
 𝓋 = zeros(J)
 ε = rand(Gumbel(), J, S);             # J x S indep. Gumbel(0,1) draws
 
-Wₛ(𝓋, ε) = mean( map(maximum, eachcol(𝓋 .+ ε)) );    # approximate surplus
-fₛ(𝓋, p, ε) = exp(Wₛ(𝓋, ε)) .- 𝓋'*p;                 # criterion (negative to turn maximization into minimization)
+function Wₛfast(𝓋, ε)
+    r = 0.0 
+    @inbounds for j ∈ axes(ε, 2)
+        κ = -Inf 
+        @inbounds for k ∈ axes(ε, 1) 
+            @views κ = κ < 𝓋[k] + ε[k, j] ? 𝓋[k] + ε[k, j] : κ
+        end 
+        r += κ  
+    end 
+    return r / size(ε, 2) 
+end 
 
-function ψ_sim(p, ε; opts = Optim.Options(show_trace = false, g_tol = 1e-14))
-    ψ₀   = zeros(size(p, 1));                                        # starting value
-    ψ    = optimize(𝓋 -> fₛ(𝓋, p, ε), ψ₀, NelderMead(), opts);       # optimize
+@btime Wₛfast(𝓋, ε)
+
+fₛ(𝒲, 𝓋, p, ε) = exp(𝒲(𝓋, ε)) - 𝓋'p;                # criterion (negative to turn maximization into minimization)
+
+function ψ_simAD(p, ε; opts = Optim.Options(show_trace = false, g_tol = 1e-14, time_limit = 100))
+    ψ₀   = zeros(size(p, 1));
+    ∇∇fₛ  = TwiceDifferentiable(𝓋 -> fₛ(Wₛfast, 𝓋, p, ε), ψ₀);
+    ψ    = optimize(∇∇fₛ, ψ₀, NewtonTrustRegion(), opts);
     return ψ
 end
 
-function ψ_simAD(p, ε; opts = Optim.Options(show_trace = false, g_tol = 1e-14))
-    ψ₀   = zeros(size(p, 1));                                       # starting value
-    ∇∇fₛ  = TwiceDifferentiable(𝓋 -> fₛ(𝓋, p, ε), ψ₀)
-    ψ    = optimize(∇∇fₛ, ψ₀, NewtonTrustRegion(), opts);            # optimize
-    return ψ
-end
-
-N = rand(Normal(0, 1), J, 1000)
-
-Optim.minimizer( ψ_sim(p, N) )
-Optim.minimizer( ψ_simAD(p, N) )
+# Burn In Example 
+    N = rand(Normal(0, 1), J, 1000)
+    ψAD     = ψ_simAD(p, N)
+    Optim.minimizer( ψAD )'
 
 # Independent Type 1 Extreme Value
     ε = rand(Gumbel(), J, S);             # J x S indep. Gumbel(0,1) draws
-    ψ = ψ_simAD(p, ε);
-    Optim.minimizer(ψ)
-    log.(p) .- γ                          # do not forget the euler gamma!
+    ψAD     = ψ_simAD(p, ε)
+    Optim.minimizer( ψAD )'
+    (log.(p) .- γ)'                       # do not forget the euler gamma!
 
 # Independent N(0,1)
     ε = randn(J, S);                      # J x S indep. N(0,1) draws
-    ψ = ψ_simAD(p, ε);
-    Optim.minimizer(ψ)
+    ψAD     = ψ_simAD(p, ε)
+    Optim.minimizer( ψAD )'
 
 # Correlated Normal
     ρ = .5;
@@ -82,8 +73,8 @@ Optim.minimizer( ψ_simAD(p, N) )
         end
     end
     ε = rand(MvNormal(zeros(J), Σ), S);   # N(0_J, Σ) draws
-    ψ = ψ_simAD(p, ε);
-    Optim.minimizer(ψ)
+    ψAD     = ψ_simAD(p, ε)
+    Optim.minimizer( ψAD )'
 
 # for reference: 
 # function ∇Wₛ(𝓋, ε, J)                   # ∇ approximate surplus
